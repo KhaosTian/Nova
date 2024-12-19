@@ -11,4 +11,4 @@ void RuntimeContext::Shutdown() {
     m_logSystem.reset();
 }
 
-}
+} // namespace Nova
