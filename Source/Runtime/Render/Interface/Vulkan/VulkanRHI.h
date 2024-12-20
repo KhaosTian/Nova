@@ -1,5 +1,6 @@
 #pragma once
 #include "VkStart.h"
+#include <cstdint>
 
 namespace Nova {
 class VulkanRHI {
@@ -68,7 +69,7 @@ public:
     }
 
     // 创建Vulkan实例的详细方法
-    VkResult CreateInstance(VkInstanceCreateFlags flags = 0) {
+    VkResult CreateVkInstance(VkInstanceCreateFlags flags = 0) {
 // 在调试模式下自动添加验证层和调试扩展
 #ifdef NOVA_DEBUG
         AddInstanceLayerName("VK_LAYER_KHRONOS_validation");
@@ -274,6 +275,10 @@ private:
     uint32_t mQueueFamilyIndexPresentation = VK_QUEUE_FAMILY_IGNORED;
     uint32_t mQueueFamilyIndexCompute      = VK_QUEUE_FAMILY_IGNORED;
 
+    VkQueue mQueueGraphics;
+    VkQueue mQueuePresentation;
+    VkQueue mQueueCompute;
+
     std::vector<const char*> mDeviceExtensionNames;
 
 public:
@@ -426,52 +431,71 @@ public:
     }
 
     // 为每个物理设备保存一份所需队列族索引的组合
-    VkResult DeterminePhysicalDevice(uint32_t deviceIndex = 0, bool enableGraphicsQueue = true, bool enableComputeQueue = true) {
-        static constexpr uint32_t notFound = INT32_MAX;
+    VkResult DeterminePhysicalDevice(uint32_t deviceIndex = 0, bool enableGraphics = true, bool enableCompute = true) {
+        static constexpr uint32_t NotFound = INT32_MAX;
+
+        struct QueueIndex {
+            uint32_t index  = VK_QUEUE_FAMILY_IGNORED;
+            bool     enable = false;
+
+            bool IsInvalid() const {
+                bool flag = (index == NotFound);
+                return flag && enable;
+            }
+
+            bool ShouldGet() const {
+                return enable && (index == NotFound);
+            }
+        };
 
         struct QueueFamilyIndices {
-            uint32_t graphics     = VK_QUEUE_FAMILY_IGNORED;
-            uint32_t presentation = VK_QUEUE_FAMILY_IGNORED;
-            uint32_t compute      = VK_QUEUE_FAMILY_IGNORED;
+            QueueIndex graphics;
+            QueueIndex present;
+            QueueIndex compute;
         };
 
         static std::vector<QueueFamilyIndices> queueFamilyIndices(mAvailablePhysicalDevices.size());
         auto& [ig, ip, ic] = queueFamilyIndices[deviceIndex];
 
+        ig.enable = enableGraphics;
+        ip.enable = mSurface != nullptr;
+        ic.enable = enableCompute;
+
         // 如果任意队列族索引应该被获取，但是没有得到，则失败
-        if (ig == notFound && enableGraphicsQueue || ip == notFound && (mSurface != nullptr) || ic == notFound && enableComputeQueue) {
+        if (ig.IsInvalid() || ip.IsInvalid() || ic.IsInvalid()) {
             return VK_RESULT_MAX_ENUM;
         }
 
         // 如果任意队列族应该被获取，但是没有找过，则尝试获取
-        if (ig == VK_QUEUE_FAMILY_IGNORED && enableGraphicsQueue || ip == VK_QUEUE_FAMILY_IGNORED && (mSurface != nullptr) ||
-            ic == VK_QUEUE_FAMILY_IGNORED && enableComputeQueue) {
+        if (ig.ShouldGet() || ip.ShouldGet() || ic.ShouldGet()) {
             uint32_t indices[3];
-            VkResult result = GetQueueFamilyIndices(mAvailablePhysicalDevices[deviceIndex], enableGraphicsQueue, enableComputeQueue, indices);
+            VkResult result = GetQueueFamilyIndices(mAvailablePhysicalDevices[deviceIndex], enableGraphics, enableCompute, indices);
             // 如果获取的结果是成功或者VK_RESULT_MAX_ENUM，则有了结果
             if (result == VK_SUCCESS || result == VK_RESULT_MAX_ENUM) {
                 // 对返回的索引与INT32_MAX做按位与操作
                 // 如果返回的索引为IGNORE，则按位与结果为
-                if (enableGraphicsQueue) {
-                    ig = indices[0] & INT32_MAX;
+                if (enableGraphics) {
+                    ig.index = indices[0] & INT32_MAX;
                 }
 
                 if (mSurface != nullptr) {
-                    ip = indices[1] & INT32_MAX;
+                    ip.index = indices[1] & INT32_MAX;
                 }
 
-                if (enableComputeQueue) {
-                    ic = indices[2] & INT32_MAX;
+                if (enableCompute) {
+                    ic.index = indices[2] & INT32_MAX;
                 }
             }
 
             if (result != VK_SUCCESS) {
                 return result;
             }
-        } else {
-            mQueueFamilyIndexGraphics     = enableGraphicsQueue ? ig : VK_QUEUE_FAMILY_IGNORED;
-            mQueueFamilyIndexPresentation = (mSurface != nullptr) ? ip : VK_QUEUE_FAMILY_IGNORED;
-            mQueueFamilyIndexCompute      = enableComputeQueue ? ic : VK_QUEUE_FAMILY_IGNORED;
+        }
+        // 如果已经有了结果，则直接使用
+        else {
+            mQueueFamilyIndexGraphics     = enableGraphics ? ig.index : VK_QUEUE_FAMILY_IGNORED;
+            mQueueFamilyIndexPresentation = (mSurface != nullptr) ? ip.index : VK_QUEUE_FAMILY_IGNORED;
+            mQueueFamilyIndexCompute      = enableCompute ? ic.index : VK_QUEUE_FAMILY_IGNORED;
         }
 
         mPhysicalDevice = mAvailablePhysicalDevices[deviceIndex];
@@ -479,6 +503,68 @@ public:
     }
 
     VkResult CreateDevice() {
+        // 统一使用1.0f的优先级
+        float queuePriority = 1.0f;
+
+        // 初始化队列创建信息数组
+        VkDeviceQueueCreateInfo queueCreateInfos[3];
+        for (auto& queueCreateInfo: queueCreateInfos) {
+            queueCreateInfo.sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+            queueCreateInfo.queueCount       = 1;
+            queueCreateInfo.pQueuePriorities = &queuePriority;
+            queueCreateInfo.queueFamilyIndex = VK_QUEUE_FAMILY_IGNORED; // 初始设置为忽略
+        }
+
+        // 创建设备队列信息的个数由队列族索引的个数决定
+        uint32_t queueCreateInfoCount = 0;
+        if (mQueueFamilyIndexGraphics != VK_QUEUE_FAMILY_IGNORED) {
+            queueCreateInfos[queueCreateInfoCount++].queueFamilyIndex = mQueueFamilyIndexGraphics;
+        }
+        if (mQueueFamilyIndexPresentation != VK_QUEUE_FAMILY_IGNORED && mQueueFamilyIndexPresentation != mQueueFamilyIndexGraphics) {
+            queueCreateInfos[queueCreateInfoCount++].queueFamilyIndex = mQueueFamilyIndexPresentation;
+        }
+        if (mQueueFamilyIndexCompute != VK_QUEUE_FAMILY_IGNORED && mQueueFamilyIndexCompute != mQueueFamilyIndexPresentation) {
+            queueCreateInfos[queueCreateInfoCount++].queueFamilyIndex = mQueueFamilyIndexCompute;
+        }
+
+        // 获取物理设备特性
+        VkPhysicalDeviceFeatures physicalDeviceFeatures;
+        vkGetPhysicalDeviceFeatures(mPhysicalDevice, &physicalDeviceFeatures);
+
+        // 构建设备创建信息
+        VkDeviceCreateInfo deviceCreateInfo;
+        deviceCreateInfo.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+        deviceCreateInfo.queueCreateInfoCount    = queueCreateInfoCount; // 队列信息个数
+        deviceCreateInfo.pQueueCreateInfos       = queueCreateInfos; // 队列信息列表
+        deviceCreateInfo.pEnabledFeatures        = &physicalDeviceFeatures; // 设备特性
+        deviceCreateInfo.enabledExtensionCount   = static_cast<uint32_t>(mDeviceExtensionNames.size()); // 扩展名称个数
+        deviceCreateInfo.ppEnabledExtensionNames = mDeviceExtensionNames.data(); // 扩展名称列表
+
+        // 创建逻辑设备
+        VkResult result = vkCreateDevice(mPhysicalDevice, &deviceCreateInfo, nullptr, &mDevice);
+        if (result != VK_SUCCESS) {
+            std::cout << std::format("[ VulkanManager ] Failed to create vulkan logical device: ") << result << '\n';
+            return result;
+        }
+
+        // 设置了每个队列族只创建一个队列，因此queueIndex为0
+        if (mQueueFamilyIndexGraphics != VK_QUEUE_FAMILY_IGNORED) {
+            vkGetDeviceQueue(mDevice, mQueueFamilyIndexGraphics, 0, &mQueueGraphics);
+        }
+        if (mQueueFamilyIndexPresentation != VK_QUEUE_FAMILY_IGNORED) {
+            vkGetDeviceQueue(mDevice, mQueueFamilyIndexPresentation, 0, &mQueuePresentation);
+        }
+        if (mQueueFamilyIndexCompute != VK_QUEUE_FAMILY_IGNORED) {
+            vkGetDeviceQueue(mDevice, mQueueFamilyIndexCompute, 0, &mQueueCompute);
+        }
+
+        // 获取物理设备属性和内存属性
+        vkGetPhysicalDeviceProperties(mPhysicalDevice, &mPhysicalDeviceProperties);
+        vkGetPhysicalDeviceMemoryProperties(mPhysicalDevice, &mPhysicalDeviceMemoryProperties);
+
+        // 打印设备名称
+        std::cout << std::format("[ VulkanManager ] 使用物理设备: {}\n", mPhysicalDeviceProperties.deviceName);
+
         return VK_SUCCESS;
     }
 

@@ -21,6 +21,38 @@ inline bool InitializeWindow(const VkExtent2D size, const bool fullScreen = fals
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, static_cast<int>(isResizable));
 
+    // 获取显示器
+    kMonitor = glfwGetPrimaryMonitor();
+
+    // 获取视频模式
+    const GLFWvidmode* pMode = glfwGetVideoMode(kMonitor);
+
+    // 根据模式创建窗口
+    kWindow = fullScreen ? glfwCreateWindow(pMode->width, pMode->height, kWindowTitle, kMonitor, nullptr)
+                         : glfwCreateWindow(static_cast<int>(size.width), static_cast<int>(size.height), kWindowTitle, nullptr, nullptr);
+    if (kWindow == nullptr) {
+        std::cout << std::format("[ InitializeWindow ] ERROR\nFailed to create GLFW window!\n");
+        glfwTerminate();
+        return false;
+    }
+
+    // 添加实例扩展
+    rhi.AddInstanceExtensionName(VK_KHR_SURFACE_EXTENSION_NAME);
+    rhi.AddInstanceExtensionName(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
+
+    // 添加交换链扩展
+    rhi.AddDeviceExtension(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+    //
+    // 使用最新的Vulkan API版本
+    rhi.UseLatestApiVersion();
+
+    // 创建Vulkan实例
+    if (rhi.CreateVkInstance() != VK_SUCCESS) {
+        std::cout << std::format("[ InitializeWindow ] ERROR\nFailed to create Vulkan instance!\n");
+        return false;
+    }
+
+    // 获取GLFW所需的实例扩展
     uint32_t     extensionCount = 0;
     const char** extensionNames = glfwGetRequiredInstanceExtensions(&extensionCount);
     if (extensionNames == nullptr) {
@@ -28,33 +60,35 @@ inline bool InitializeWindow(const VkExtent2D size, const bool fullScreen = fals
         glfwTerminate();
         return false;
     }
-
+    // 添加GLFW所需的实例扩展
     for (size_t i = 0; i < extensionCount; i++) {
         rhi.AddInstanceExtensionName(extensionNames[i]);
     }
 
     //window surface
     VkSurfaceKHR surface = VK_NULL_HANDLE;
-    if (VkResult result = glfwCreateWindowSurface(rhi.GetVKInstance(), kWindow, nullptr, &surface)) {
+    VkResult     result  = glfwCreateWindowSurface(rhi.GetVKInstance(), kWindow, nullptr, &surface);
+    if (result != VK_SUCCESS) {
         std::cout << std::format("[ InitializeWindow ] ERROR\nFailed to create GLFW surface!\n");
         glfwTerminate();
         return false;
     }
 
+    // 设置窗口表面
     rhi.SetSurface(surface);
 
-    kMonitor                 = glfwGetPrimaryMonitor();
-    const GLFWvidmode* pMode = glfwGetVideoMode(kMonitor);
-
-    // 创建窗口
-    kWindow = fullScreen ? glfwCreateWindow(pMode->width, pMode->height, kWindowTitle, kMonitor, nullptr)
-                         : glfwCreateWindow(static_cast<int>(size.width), static_cast<int>(size.height), kWindowTitle, nullptr, nullptr);
-
-    if (kWindow == nullptr) {
-        std::cout << std::format("[ InitializeWindow ] ERROR\nFailed to create GLFW window!\n");
-        glfwTerminate();
+    if (rhi.GetPhysicalDevice() != VK_SUCCESS) {
         return false;
     }
+    
+    if (rhi.DeterminePhysicalDevice(0, true, false) != VK_SUCCESS) {
+        return false;
+    }
+    
+    if (rhi.CreateDevice() != VK_SUCCESS) {
+        return false;
+    }
+
     return true;
 }
 
