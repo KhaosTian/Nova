@@ -95,13 +95,13 @@ public:
 
         // 尝试创建Vulkan实例
         if (const VkResult result = vkCreateInstance(&instanceCreateInfo, nullptr, &mInstance)) {
-            std::cout << std::format("[ VulkanManager ] 创建实例失败: ") << result << '\n';
+            std::cout << std::format("[ Vulkan RHI ] 创建实例失败: ") << result << '\n';
             return result;
         }
 
         // 打印Vulkan API版本信息
         std::cout << std::format(
-            "Vulkan API 版本: {}.{}.{}\n",
+            "[ Vulkan RHI ] Vulkan API Version: {}.{}.{}\n",
             VK_VERSION_MAJOR(mApiVersion),
             VK_VERSION_MINOR(mApiVersion),
             VK_VERSION_PATCH(mApiVersion)
@@ -119,7 +119,7 @@ public:
         uint32_t layerCount;
         // 获取可用层数量
         if (VkResult result = vkEnumerateInstanceLayerProperties(&layerCount, nullptr)) {
-            std::cout << std::format("[ VulkanManager ] 枚举实例层属性失败: ") << result << '\n';
+            std::cout << std::format("[ Vulkan RHI ] 枚举实例层属性失败: ") << result << '\n';
             return result;
         }
 
@@ -135,7 +135,7 @@ public:
         std::vector<VkLayerProperties> availableLayers;
         availableLayers.resize(layerCount);
         if (VkResult result = vkEnumerateInstanceLayerProperties(&layerCount, availableLayers.data())) {
-            std::cout << std::format("[ VulkanManager ] 枚举实例层属性失败: ") << result << '\n';
+            std::cout << std::format("[ Vulkan RHI ] 枚举实例层属性失败: ") << result << '\n';
             return result;
         }
 
@@ -167,7 +167,7 @@ public:
         uint32_t extensionCount;
         // 获取可用扩展数量
         if (VkResult result = vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr)) {
-            std::cout << std::format("[ VulkanManager ] 枚举实例扩展属性失败: ") << result << '\n';
+            std::cout << std::format("[ Vulkan RHI ] 枚举实例扩展属性失败: ") << result << '\n';
             return result;
         }
 
@@ -182,7 +182,7 @@ public:
         // 获取可用扩展属性
         std::vector<VkExtensionProperties> availableExtensions(extensionCount);
         if (VkResult result = vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, availableExtensions.data())) {
-            std::cout << std::format("[ VulkanManager ] 枚举实例扩展属性失败: ") << result << '\n';
+            std::cout << std::format("[ Vulkan RHI ] 枚举实例扩展属性失败: ") << result << '\n';
             return result;
         }
 
@@ -218,7 +218,7 @@ private:
                                                                                      VkDebugUtilsMessageTypeFlagsEXT             messageTypes,
                                                                                      const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
                                                                                      void* pUserData) -> VkBool32 {
-            std::cout << std::format("[ VulkanManager ] Debug: ") << pCallbackData->pMessage << '\n';
+            std::cout << std::format("[ Vulkan RHI ] Debug: ") << pCallbackData->pMessage << '\n';
             return VK_FALSE;
         };
 
@@ -235,12 +235,12 @@ private:
         if (vkCreateDebugUtilsMessengerExt != nullptr) {
             const VkResult result = vkCreateDebugUtilsMessengerExt(mInstance, &debugUtilsMessengerCreateInfo, nullptr, &mDebugMessenger);
             if (result != VK_SUCCESS) {
-                std::cout << std::format("[ VulkanManager ] Failed to create debug messenger: ") << result << '\n';
+                std::cout << std::format("[ Vulkan RHI ] Failed to create debug messenger: ") << result << '\n';
             }
             return result;
         }
 
-        std::cout << std::format("[ VulkanManager ] Failed to get vkCreateDebugUtilsMessengerEXT\n");
+        std::cout << std::format("[ Vulkan RHI ] Failed to get vkCreateDebugUtilsMessengerEXT\n");
 
         //没有合适的错误代码时就返回 VK_RESULT_MAX_ENUM
         return VK_RESULT_MAX_ENUM;
@@ -338,7 +338,7 @@ public:
                 VkBool32 support = ConvertToVkBool32(supportPresentation);
                 VkResult result  = vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice, i, mSurface, &support);
                 if (result != VK_SUCCESS) {
-                    std::cout << std::format("[ VulkanManager ] Failed to get vkGetPhysicalDeviceSurfaceSupportKHR: ") << result << '\n';
+                    std::cout << std::format("[ Vulkan RHI ] Failed to get vkGetPhysicalDeviceSurfaceSupportKHR: ") << result << '\n';
                     return result;
                 }
                 supportPresentation = ConvertToBool(support);
@@ -414,18 +414,18 @@ public:
         uint32_t deviceCount = 0;
         VkResult result      = vkEnumeratePhysicalDevices(mInstance, &deviceCount, nullptr);
         if (result != VK_SUCCESS) {
-            std::cout << std::format("[ VulkanManager ] Failed to enumerate physical devices: ") << result << '\n';
+            std::cout << std::format("[ Vulkan RHI ] Failed to enumerate physical devices: ") << result << '\n';
             return result;
         }
         if (deviceCount == 0) {
-            std::cout << std::format("[ VulkanManager ] Failed to find any physical devices\n");
+            std::cout << std::format("[ Vulkan RHI ] Failed to find any physical devices\n");
             abort();
         }
 
         mAvailablePhysicalDevices.resize(deviceCount);
         result = vkEnumeratePhysicalDevices(mInstance, &deviceCount, mAvailablePhysicalDevices.data());
         if (result != VK_SUCCESS) {
-            std::cout << std::format("[ VulkanManager ] Failed to enumerate physical devices: ") << result << '\n';
+            std::cout << std::format("[ Vulkan RHI ] Failed to enumerate physical devices: ") << result << '\n';
         }
         return result;
     }
@@ -439,12 +439,11 @@ public:
             bool     enable = false;
 
             bool IsInvalid() const {
-                bool flag = (index == NotFound);
-                return flag && enable;
+                return (index == NotFound) && enable;
             }
 
             bool ShouldGet() const {
-                return enable && (index == NotFound);
+                return (index == VK_QUEUE_FAMILY_IGNORED) && enable;
             }
         };
 
@@ -507,13 +506,26 @@ public:
         float queuePriority = 1.0f;
 
         // 初始化队列创建信息数组
-        VkDeviceQueueCreateInfo queueCreateInfos[3];
-        for (auto& queueCreateInfo: queueCreateInfos) {
-            queueCreateInfo.sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-            queueCreateInfo.queueCount       = 1;
-            queueCreateInfo.pQueuePriorities = &queuePriority;
-            queueCreateInfo.queueFamilyIndex = VK_QUEUE_FAMILY_IGNORED; // 初始设置为忽略
-        }
+        VkDeviceQueueCreateInfo queueCreateInfos[3] = {
+            {
+                .sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+                .queueFamilyIndex = mQueueFamilyIndexGraphics,
+                .queueCount       = 1,
+                .pQueuePriorities = &queuePriority,
+            },
+            {
+                .sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+                .queueFamilyIndex = mQueueFamilyIndexPresentation,
+                .queueCount       = 1,
+                .pQueuePriorities = &queuePriority,
+            },
+            {
+                .sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+                .queueFamilyIndex = mQueueFamilyIndexCompute,
+                .queueCount       = 1,
+                .pQueuePriorities = &queuePriority,
+            },
+        };
 
         // 创建设备队列信息的个数由队列族索引的个数决定
         uint32_t queueCreateInfoCount = 0;
@@ -532,18 +544,17 @@ public:
         vkGetPhysicalDeviceFeatures(mPhysicalDevice, &physicalDeviceFeatures);
 
         // 构建设备创建信息
-        VkDeviceCreateInfo deviceCreateInfo;
-        deviceCreateInfo.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-        deviceCreateInfo.queueCreateInfoCount    = queueCreateInfoCount; // 队列信息个数
-        deviceCreateInfo.pQueueCreateInfos       = queueCreateInfos; // 队列信息列表
-        deviceCreateInfo.pEnabledFeatures        = &physicalDeviceFeatures; // 设备特性
-        deviceCreateInfo.enabledExtensionCount   = static_cast<uint32_t>(mDeviceExtensionNames.size()); // 扩展名称个数
-        deviceCreateInfo.ppEnabledExtensionNames = mDeviceExtensionNames.data(); // 扩展名称列表
+        VkDeviceCreateInfo deviceCreateInfo = { .sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+                                                .queueCreateInfoCount    = queueCreateInfoCount,
+                                                .pQueueCreateInfos       = queueCreateInfos,
+                                                .enabledExtensionCount   = static_cast<uint32_t>(mDeviceExtensionNames.size()),
+                                                .ppEnabledExtensionNames = mDeviceExtensionNames.data(),
+                                                .pEnabledFeatures        = &physicalDeviceFeatures };
 
         // 创建逻辑设备
         VkResult result = vkCreateDevice(mPhysicalDevice, &deviceCreateInfo, nullptr, &mDevice);
         if (result != VK_SUCCESS) {
-            std::cout << std::format("[ VulkanManager ] Failed to create vulkan logical device: ") << result << '\n';
+            std::cout << std::format("[ Vulkan RHI ] Failed to create vulkan logical device: ") << result << '\n';
             return result;
         }
 
@@ -563,7 +574,7 @@ public:
         vkGetPhysicalDeviceMemoryProperties(mPhysicalDevice, &mPhysicalDeviceMemoryProperties);
 
         // 打印设备名称
-        std::cout << std::format("[ VulkanManager ] 使用物理设备: {}\n", mPhysicalDeviceProperties.deviceName);
+        std::cout << std::format("[ Vulkan RHI ] Physical Device: {}\n", mPhysicalDeviceProperties.deviceName);
 
         return VK_SUCCESS;
     }
