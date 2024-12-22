@@ -3,6 +3,9 @@
 #include <cstdint>
 
 namespace Nova {
+
+constexpr VkExtent2D kDefaultWindowSize = { 1280, 720 };
+
 class VulkanRHI {
 private:
     // 单例模式私有构造函数和析构函数，确保只能通过GetSingleton()获取实例
@@ -599,6 +602,46 @@ private:
     VkSwapchainCreateInfoKHR mSwapChainCreateInfo = {};
 
     VkResult CreateSwapchainInternal() {
+        // 获取surface capabilities
+        VkSurfaceCapabilitiesKHR surfaceCapabilities = {};
+        if (VkResult result = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(mPhysicalDevice, mSurface, &surfaceCapabilities)) {
+            std::cout << std::format("[ Vulkan RHI ] Failed to get physical device surface capabilities: ") << result << '\n';
+            return result;
+        }
+        mSwapChainCreateInfo.minImageCount =
+            surfaceCapabilities.minImageCount + static_cast<uint32_t>(surfaceCapabilities.maxImageCount > surfaceCapabilities.minImageCount);
+
+        // 如果当前尺寸已经存在，则使用当前尺寸，否则使用最小尺寸和最大尺寸之间的默认尺寸
+        VkExtent2D imageExtent = {};
+        // 如果尺寸未定，当前尺寸的值会是-1
+        if (surfaceCapabilities.currentExtent.width == -1) {
+            imageExtent.width =
+                glm::clamp(kDefaultWindowSize.width, surfaceCapabilities.minImageExtent.width, surfaceCapabilities.maxImageExtent.width);
+            imageExtent.height =
+                glm::clamp(kDefaultWindowSize.height, surfaceCapabilities.minImageExtent.height, surfaceCapabilities.maxImageExtent.height);
+        } else {
+            imageExtent = surfaceCapabilities.currentExtent;
+        }
+        mSwapChainCreateInfo.imageExtent = imageExtent;
+
+        // 视点数
+        mSwapChainCreateInfo.imageArrayLayers = 1;
+        // 使用当前变换
+        mSwapChainCreateInfo.preTransform = surfaceCapabilities.currentTransform;
+
+        // 指定处理swapchia图形的透明通道的方式
+        // window可能会指定，此时应选择继承方式
+        if ((surfaceCapabilities.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR) != 0u ) {
+            mSwapChainCreateInfo.compositeAlpha = VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
+        } else {
+            for (size_t i = 0; i < 4; i++) {
+                if ((surfaceCapabilities.supportedCompositeAlpha & 1 << i) != 0u) {
+                    mSwapChainCreateInfo.compositeAlpha = VkCompositeAlphaFlagBitsKHR(surfaceCapabilities.supportedCompositeAlpha & 1 << i);
+                    break;
+                }
+            }
+        }
+
         return VK_SUCCESS;
     }
 

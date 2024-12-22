@@ -1,0 +1,4 @@
+If:
+  PathMatch: .*/Nova/.*\.cpp
+Diagnostics:
+  UnusedIncludes: Strict
