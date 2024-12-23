@@ -1,6 +1,7 @@
 #pragma once
 #include "VkStart.h"
 #include <cstdint>
+#include <stdlib.h>
 
 namespace Nova {
 
@@ -631,7 +632,7 @@ private:
 
         // 指定处理swapchia图形的透明通道的方式
         // window可能会指定，此时应选择继承方式
-        if ((surfaceCapabilities.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR) != 0u ) {
+        if ((surfaceCapabilities.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR) != 0u) {
             mSwapChainCreateInfo.compositeAlpha = VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
         } else {
             for (size_t i = 0; i < 4; i++) {
@@ -640,6 +641,19 @@ private:
                     break;
                 }
             }
+        }
+
+        // 设置交换链图像格式,默认为color attachment
+        mSwapChainCreateInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        // 如果支持传输目标，则添加传输目标标志,这样可以执行清屏以及blit操作
+        if ((surfaceCapabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT) != 0u) {
+            mSwapChainCreateInfo.imageUsage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        }
+        // 如果支持传输源，则添加传输源标志,可以实现窗口截屏
+        if ((surfaceCapabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0u) {
+            mSwapChainCreateInfo.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        } else {
+            std::cout << std::format("[ Vulkan RHI ] VK_IMAGE_USAGE_TRANSFER_SRC_BIT is not supported\n");
         }
 
         return VK_SUCCESS;
@@ -679,6 +693,52 @@ public:
     }
 
     VkResult GetSurfaceFormats() {
+        uint32_t surfaceFormatCount = 0;
+
+        VkResult result = vkGetPhysicalDeviceSurfaceFormatsKHR(mPhysicalDevice, mSurface, &surfaceFormatCount, nullptr);
+        if (result != VK_SUCCESS) {
+            std::cout << std::format("[ Vulkan RHI ] Failed to get the count of surface formats: {}\n", int32_t(result));
+            return result;
+        }
+
+        if (surfaceFormatCount == 0) {
+            std::cout << std::format("[ Vulkan RHI ] Failed to find any surface formats\n");
+            abort();
+        }
+
+        // 获取surface formats
+        mAvailableSurfaceFormats.resize(surfaceFormatCount);
+        result = vkGetPhysicalDeviceSurfaceFormatsKHR(mPhysicalDevice, mSurface, &surfaceFormatCount, mAvailableSurfaceFormats.data());
+        if (result != VK_SUCCESS) {
+            std::cout << std::format("[ Vulkan RHI ] Failed to get surface formats\nError Code: {}\n", int32_t(result));
+        }
+
+        return VK_SUCCESS;
+    }
+
+    VkResult SetSurfaceFormat(VkSurfaceFormatKHR surfaceFormat) {
+        bool formatIsAvailable = false;
+        bool needCheckFormat   = (surfaceFormat.format != VK_FORMAT_UNDEFINED);
+        for (auto& item: mAvailableSurfaceFormats) {
+            if (item.colorSpace == surfaceFormat.colorSpace && (!needCheckFormat || item.format == surfaceFormat.format)) {
+                mSwapChainCreateInfo.imageFormat     = item.format;
+                mSwapChainCreateInfo.imageColorSpace = item.colorSpace;
+                formatIsAvailable                    = true;
+                break;
+            }
+        }
+
+        // 如果没有符合的格式,返回指定错误码
+        if (formatIsAvailable == false) {
+            std::cout << std::format("[ Vulkan RHI ] Surface format is not available\n");
+            return VK_ERROR_FORMAT_NOT_SUPPORTED;
+        }
+
+        // 如果交换链已经存在,则重新创建交换链
+        if (mSwapChain != nullptr) {
+            return RecreateSwapChain();
+        }
+
         return VK_SUCCESS;
     }
 
