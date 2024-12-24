@@ -9,7 +9,7 @@ inline GLFWmonitor* kMonitor;
 
 inline auto kWindowTitle = "LearnVulkan";
 
-inline bool InitializeWindow(const VkExtent2D size, const bool fullScreen = false, const bool isResizable = true, bool enableFpsLimit = true) {
+inline bool InitializeWindow(const VkExtent2D size, const bool fullScreen = false, const bool isResizable = true, bool limitFrameRate = true) {
     auto& rhi = Nova::VulkanRHI::GetInstance();
 
     if (glfwInit() == 0) {
@@ -80,12 +80,19 @@ inline bool InitializeWindow(const VkExtent2D size, const bool fullScreen = fals
     if (rhi.GetPhysicalDevice() != VK_SUCCESS) {
         return false;
     }
-    
+
     if (rhi.DeterminePhysicalDevice(0, true, false) != VK_SUCCESS) {
         return false;
     }
-    
+
     if (rhi.CreateDevice() != VK_SUCCESS) {
+        return false;
+    }
+
+    // 创建交换链
+    result = rhi.CreateSwapchain(limitFrameRate);
+    if (result != VK_SUCCESS) {
+        std::cout << std::format("[ InitializeWindow ] ERROR\nFailed to create swapchain: ") << result << '\n';
         return false;
     }
 
@@ -93,6 +100,8 @@ inline bool InitializeWindow(const VkExtent2D size, const bool fullScreen = fals
 }
 
 inline void TerminateWindow() {
+    // 终止窗口前应该确保vulkan device已经空闲, 没有和窗口系统的呈现引擎进行交互
+    Nova::VulkanRHI::GetInstance().WaitIdleDevice();
     glfwTerminate();
 }
 

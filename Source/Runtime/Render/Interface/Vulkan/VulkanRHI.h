@@ -1,7 +1,9 @@
 #pragma once
+#include "Render/Interface/Vulkan/GlfwGeneral.hpp"
 #include "VkStart.h"
 #include <cstdint>
 #include <stdlib.h>
+#include <vector>
 
 namespace Nova {
 
@@ -11,6 +13,67 @@ class VulkanRHI {
 private:
     // 单例模式私有构造函数和析构函数，确保只能通过GetSingleton()获取实例
     VulkanRHI() = default;
+    ~VulkanRHI() {
+        if (mVkInstance == nullptr) {
+            return;
+        }
+
+        // 销毁逻辑设备
+        if (mDevice != nullptr) {
+            WaitIdleDevice();
+
+            // 销毁交换链
+            if (mSwapChain != nullptr) {
+                for (auto& callback: mDestroySwapChainCallbacks) {
+                    callback();
+                }
+                for (auto& imageView: mSwapChainImageViews) {
+                    if (imageView != nullptr) {
+                        vkDestroyImageView(mDevice, imageView, nullptr);
+                    }
+                }
+                vkDestroySwapchainKHR(mDevice, mSwapChain, nullptr);
+            }
+
+            // 调用销毁设备回调
+            for (auto& callback: mDestroyDeviceCallbacks) {
+                callback();
+            }
+
+            vkDestroyDevice(mDevice, nullptr);
+        }
+
+        // 销毁窗口表面
+        if (mSurface != nullptr) {
+            vkDestroySurfaceKHR(mVkInstance, mSurface, nullptr);
+        }
+
+        // 销毁debug messenger
+        if (mDebugMessenger != nullptr) {
+            PFN_vkDestroyDebugUtilsMessengerEXT vkDestroyDebugUtilsMessengerExt =
+                reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(mVkInstance, "vkDestroyDebugUtilsMessengerEXT"));
+            if (vkDestroyDebugUtilsMessengerExt != nullptr) {
+                vkDestroyDebugUtilsMessengerExt(mVkInstance, mDebugMessenger, nullptr);
+            }
+        }
+
+        // 销毁Vulkan实例
+        vkDestroyInstance(mVkInstance, nullptr);
+    }
+
+public:
+    void Terminal() {
+        this->~VulkanRHI();
+        mVkInstance     = VK_NULL_HANDLE;
+        mDebugMessenger = VK_NULL_HANDLE;
+        mPhysicalDevice = VK_NULL_HANDLE;
+        mDevice         = VK_NULL_HANDLE;
+        mSurface        = VK_NULL_HANDLE;
+        mSwapChain      = VK_NULL_HANDLE;
+        mSwapChainImages.resize(0);
+        mSwapChainImageViews.resize(0);
+        mSwapChainCreateInfo = {};
+    }
 
 public:
     // 禁用移动构造，保证单例唯一性
@@ -26,7 +89,7 @@ public:
     // vulkan instance, layer, extension
     //================== =========================================================
 private:
-    VkInstance mInstance;
+    VkInstance mVkInstance;
 
     // 实例层和扩展名称容器
     // 使用vector存储，支持动态添加和查询
@@ -49,7 +112,7 @@ private:
 public:
     // 获取Vulkan实例句柄
     VkInstance GetVKInstance() const {
-        return mInstance;
+        return mVkInstance;
     }
 
     // 获取实例层名称列表
@@ -98,7 +161,7 @@ public:
         };
 
         // 尝试创建Vulkan实例
-        if (const VkResult result = vkCreateInstance(&instanceCreateInfo, nullptr, &mInstance)) {
+        if (const VkResult result = vkCreateInstance(&instanceCreateInfo, nullptr, &mVkInstance)) {
             std::cout << std::format("[ Vulkan RHI ] 创建实例失败: ") << result << '\n';
             return result;
         }
@@ -235,9 +298,9 @@ private:
         };
 
         const auto vkCreateDebugUtilsMessengerExt =
-            reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(mInstance, "vkCreateDebugUtilsMessengerEXT"));
+            reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(mVkInstance, "vkCreateDebugUtilsMessengerEXT"));
         if (vkCreateDebugUtilsMessengerExt != nullptr) {
-            const VkResult result = vkCreateDebugUtilsMessengerExt(mInstance, &debugUtilsMessengerCreateInfo, nullptr, &mDebugMessenger);
+            const VkResult result = vkCreateDebugUtilsMessengerExt(mVkInstance, &debugUtilsMessengerCreateInfo, nullptr, &mDebugMessenger);
             if (result != VK_SUCCESS) {
                 std::cout << std::format("[ Vulkan RHI ] Failed to create debug messenger: ") << result << '\n';
             }
@@ -416,7 +479,7 @@ public:
 
     VkResult GetPhysicalDevice() {
         uint32_t deviceCount = 0;
-        VkResult result      = vkEnumeratePhysicalDevices(mInstance, &deviceCount, nullptr);
+        VkResult result      = vkEnumeratePhysicalDevices(mVkInstance, &deviceCount, nullptr);
         if (result != VK_SUCCESS) {
             std::cout << std::format("[ Vulkan RHI ] Failed to enumerate physical devices: ") << result << '\n';
             return result;
@@ -427,7 +490,7 @@ public:
         }
 
         mAvailablePhysicalDevices.resize(deviceCount);
-        result = vkEnumeratePhysicalDevices(mInstance, &deviceCount, mAvailablePhysicalDevices.data());
+        result = vkEnumeratePhysicalDevices(mVkInstance, &deviceCount, mAvailablePhysicalDevices.data());
         if (result != VK_SUCCESS) {
             std::cout << std::format("[ Vulkan RHI ] Failed to enumerate physical devices: ") << result << '\n';
         }
@@ -505,7 +568,7 @@ public:
         return VK_SUCCESS;
     }
 
-    VkResult CreateDevice() {
+    VkResult CreateDevice(VkDeviceCreateFlags flags = 0) {
         // 统一使用1.0f的优先级
         float queuePriority = 1.0f;
 
@@ -580,6 +643,11 @@ public:
         // 打印设备名称
         std::cout << std::format("[ Vulkan RHI ] Physical Device: {}\n", mPhysicalDeviceProperties.deviceName);
 
+        // 调用设备创建回调
+        for (auto& callback: mCreateDeviceCallbacks) {
+            callback();
+        }
+
         return VK_SUCCESS;
     }
 
@@ -603,57 +671,45 @@ private:
     VkSwapchainCreateInfoKHR mSwapChainCreateInfo = {};
 
     VkResult CreateSwapchainInternal() {
-        // 获取surface capabilities
-        VkSurfaceCapabilitiesKHR surfaceCapabilities = {};
-        if (VkResult result = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(mPhysicalDevice, mSurface, &surfaceCapabilities)) {
-            std::cout << std::format("[ Vulkan RHI ] Failed to get physical device surface capabilities: ") << result << '\n';
+        // 创建交换链
+        VkResult result = vkCreateSwapchainKHR(mDevice, &mSwapChainCreateInfo, nullptr, &mSwapChain);
+        if (result != VK_SUCCESS) {
+            std::cout << std::format("[ Vulkan RHI ] Failed to create swap chain: {}\n", int32_t(result));
             return result;
         }
-        mSwapChainCreateInfo.minImageCount =
-            surfaceCapabilities.minImageCount + static_cast<uint32_t>(surfaceCapabilities.maxImageCount > surfaceCapabilities.minImageCount);
 
-        // 如果当前尺寸已经存在，则使用当前尺寸，否则使用最小尺寸和最大尺寸之间的默认尺寸
-        VkExtent2D imageExtent = {};
-        // 如果尺寸未定，当前尺寸的值会是-1
-        if (surfaceCapabilities.currentExtent.width == -1) {
-            imageExtent.width =
-                glm::clamp(kDefaultWindowSize.width, surfaceCapabilities.minImageExtent.width, surfaceCapabilities.maxImageExtent.width);
-            imageExtent.height =
-                glm::clamp(kDefaultWindowSize.height, surfaceCapabilities.minImageExtent.height, surfaceCapabilities.maxImageExtent.height);
-        } else {
-            imageExtent = surfaceCapabilities.currentExtent;
+        // 获取交换链图像
+        uint32_t swapChainImageCount = 0;
+
+        result = vkGetSwapchainImagesKHR(mDevice, mSwapChain, &swapChainImageCount, nullptr);
+        if (result != VK_SUCCESS) {
+            std::cout << std::format("[ Vulkan RHI ] Failed to get swap chain images: {}\n", int32_t(result));
+            return result;
         }
-        mSwapChainCreateInfo.imageExtent = imageExtent;
 
-        // 视点数
-        mSwapChainCreateInfo.imageArrayLayers = 1;
-        // 使用当前变换
-        mSwapChainCreateInfo.preTransform = surfaceCapabilities.currentTransform;
+        // 获取交换链图像
+        mSwapChainImages.resize(swapChainImageCount);
+        result = vkGetSwapchainImagesKHR(mDevice, mSwapChain, &swapChainImageCount, mSwapChainImages.data());
+        if (result != VK_SUCCESS) {
+            std::cout << std::format("[ Vulkan RHI ] Failed to get swap chain images: {}\n", int32_t(result));
+            return result;
+        }
 
-        // 指定处理swapchia图形的透明通道的方式
-        // window可能会指定，此时应选择继承方式
-        if ((surfaceCapabilities.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR) != 0u) {
-            mSwapChainCreateInfo.compositeAlpha = VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
-        } else {
-            for (size_t i = 0; i < 4; i++) {
-                if ((surfaceCapabilities.supportedCompositeAlpha & 1 << i) != 0u) {
-                    mSwapChainCreateInfo.compositeAlpha = VkCompositeAlphaFlagBitsKHR(surfaceCapabilities.supportedCompositeAlpha & 1 << i);
-                    break;
-                }
+        mSwapChainImageViews.resize(swapChainImageCount);
+        // 交换链图像视图创建信息
+        VkImageViewCreateInfo imageViewCreateInfo = { .sType            = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                                                      .viewType         = VK_IMAGE_VIEW_TYPE_2D,
+                                                      .format           = mSwapChainCreateInfo.imageFormat,
+                                                      .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 } };
+
+        for (size_t i = 0; i < swapChainImageCount; i++) {
+            imageViewCreateInfo.image = mSwapChainImages[i];
+
+            result = vkCreateImageView(mDevice, &imageViewCreateInfo, nullptr, &mSwapChainImageViews[i]);
+            if (result != VK_SUCCESS) {
+                std::cout << std::format("[ Vulkan RHI ] Failed to create a swapch image view: {}\n", int32_t(result));
+                return result;
             }
-        }
-
-        // 设置交换链图像格式,默认为color attachment
-        mSwapChainCreateInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-        // 如果支持传输目标，则添加传输目标标志,这样可以执行清屏以及blit操作
-        if ((surfaceCapabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT) != 0u) {
-            mSwapChainCreateInfo.imageUsage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        }
-        // 如果支持传输源，则添加传输源标志,可以实现窗口截屏
-        if ((surfaceCapabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0u) {
-            mSwapChainCreateInfo.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-        } else {
-            std::cout << std::format("[ Vulkan RHI ] VK_IMAGE_USAGE_TRANSFER_SRC_BIT is not supported\n");
         }
 
         return VK_SUCCESS;
@@ -743,10 +799,272 @@ public:
     }
 
     VkResult CreateSwapchain(bool limitFrameRate = true, VkSwapchainCreateFlagsKHR flags = 0) {
+        // 获取surface capabilities
+        VkSurfaceCapabilitiesKHR surfaceCapabilities = {};
+        if (VkResult result = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(mPhysicalDevice, mSurface, &surfaceCapabilities)) {
+            std::cout << std::format("[ Vulkan RHI ] Failed to get physical device surface capabilities: ") << result << '\n';
+            return result;
+        }
+
+        mSwapChainCreateInfo.minImageCount =
+            surfaceCapabilities.minImageCount + static_cast<uint32_t>(surfaceCapabilities.maxImageCount > surfaceCapabilities.minImageCount);
+
+        // 如果当前尺寸已经存在，则使用当前尺寸，否则使用最小尺寸和最大尺寸之间的默认尺寸
+        VkExtent2D imageExtent = {};
+        // 如果尺寸未定，当前尺寸的值会是-1
+        if (surfaceCapabilities.currentExtent.width == -1) {
+            imageExtent.width =
+                glm::clamp(kDefaultWindowSize.width, surfaceCapabilities.minImageExtent.width, surfaceCapabilities.maxImageExtent.width);
+            imageExtent.height =
+                glm::clamp(kDefaultWindowSize.height, surfaceCapabilities.minImageExtent.height, surfaceCapabilities.maxImageExtent.height);
+        } else {
+            imageExtent = surfaceCapabilities.currentExtent;
+        }
+        mSwapChainCreateInfo.imageExtent = imageExtent;
+
+        // 视点数
+        mSwapChainCreateInfo.imageArrayLayers = 1;
+        // 使用当前变换
+        mSwapChainCreateInfo.preTransform = surfaceCapabilities.currentTransform;
+
+        // 指定处理swapchia图形的透明通道的方式
+        // window可能会指定，此时应选择继承方式
+        if ((surfaceCapabilities.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR) != 0u) {
+            mSwapChainCreateInfo.compositeAlpha = VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
+        } else {
+            for (size_t i = 0; i < 4; i++) {
+                if ((surfaceCapabilities.supportedCompositeAlpha & 1 << i) != 0u) {
+                    mSwapChainCreateInfo.compositeAlpha = VkCompositeAlphaFlagBitsKHR(surfaceCapabilities.supportedCompositeAlpha & 1 << i);
+                    break;
+                }
+            }
+        }
+
+        // 设置交换链图像格式,默认为color attachment
+        mSwapChainCreateInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        // 如果支持传输目标，则添加传输目标标志,这样可以执行清屏以及blit操作
+        if ((surfaceCapabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT) != 0u) {
+            mSwapChainCreateInfo.imageUsage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        }
+        // 如果支持传输源，则添加传输源标志,可以实现窗口截屏
+        if ((surfaceCapabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0u) {
+            mSwapChainCreateInfo.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        } else {
+            std::cout << std::format("[ Vulkan RHI ] VK_IMAGE_USAGE_TRANSFER_SRC_BIT is not supported\n");
+        }
+
+        // 如果没有可用的surface format, 则尝试获取
+        if (mAvailableSurfaceFormats.empty()) {
+            // 如果没有失败,那么availableSurfaceFormats肯定有值
+            VkResult result = GetSurfaceFormats();
+            if (result != VK_SUCCESS) {
+                return result;
+            }
+        }
+
+        // 如果没有指定图像格式,则尝试选择一个
+        if (mSwapChainCreateInfo.imageFormat == VK_FORMAT_UNDEFINED) {
+            // 尝试选择一个四分量UNORM格式,通常R8G8B8A8或者B8G8R8A8肯定是可用的
+            if (SetSurfaceFormat({ VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR }) != VK_SUCCESS &&
+                SetSurfaceFormat({ VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR }) != VK_SUCCESS) {
+                // 如果真的没有找到, 那么就选择第一个可用的格式
+                mSwapChainCreateInfo.imageFormat     = mAvailableSurfaceFormats[0].format;
+                mSwapChainCreateInfo.imageColorSpace = mAvailableSurfaceFormats[0].colorSpace;
+                std::cout << std::format("[ Vulkan RHI ] Failed to select a four-component UNORM surface format\n");
+            }
+        }
+
+        // 获取surface present mode数量
+        uint32_t surfacePresentModeCount = 0;
+
+        VkResult result = vkGetPhysicalDeviceSurfacePresentModesKHR(mPhysicalDevice, mSurface, &surfacePresentModeCount, nullptr);
+        if (result != VK_SUCCESS) {
+            std::cout << std::format("[ Vulkan RHI ] Failed to get the count of surface present modes: {}\n", int32_t(result));
+            return result;
+        }
+        if (surfacePresentModeCount == 0) {
+            std::cout << std::format("[ Vulkan RHI ] Failed to find any surface present modes\n");
+            abort();
+        }
+
+        // 获取surface present modes
+        std::vector<VkPresentModeKHR> surfacePresentModes(surfacePresentModeCount);
+        result = vkGetPhysicalDeviceSurfacePresentModesKHR(mPhysicalDevice, mSurface, &surfacePresentModeCount, surfacePresentModes.data());
+        if (result != VK_SUCCESS) {
+            std::cout << std::format("[ Vulkan RHI ] Failed to get surface present modes\nError Code: {}\n", int32_t(result));
+            return result;
+        }
+
+        // 设置交换链呈现模式,默认为FIFO,即垂直同步
+        mSwapChainCreateInfo.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+        // 如果不限制帧率,则选择三重缓冲模式
+        if (limitFrameRate == false) {
+            for (auto mode: surfacePresentModes) {
+                if (mode == VK_PRESENT_MODE_MAILBOX_KHR) {
+                    mSwapChainCreateInfo.presentMode = VK_PRESENT_MODE_MAILBOX_KHR;
+                    break;
+                }
+            }
+        }
+
+        // 设置其他交换链信息
+        mSwapChainCreateInfo.sType            = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+        mSwapChainCreateInfo.flags            = flags;
+        mSwapChainCreateInfo.surface          = mSurface;
+        mSwapChainCreateInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE; // 独占模式
+        mSwapChainCreateInfo.clipped          = VK_TRUE; // 裁剪不可见区域
+
+        // 创建交换链
+        result = CreateSwapchainInternal();
+        if (result != VK_SUCCESS) {
+            return result;
+        }
+
+        // 交换链创建成功后,调用回调函数
+        for (auto& callback: mCreateSwapChainCallbacks) {
+            callback();
+        }
+
         return VK_SUCCESS;
     }
 
     VkResult RecreateSwapChain() {
+        VkSurfaceCapabilitiesKHR surfaceCapabilities = {};
+        // 获取surface capabilities
+        VkResult result = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(mPhysicalDevice, mSurface, &surfaceCapabilities);
+        if (result != VK_SUCCESS) {
+            std::cout << std::format("[ Vulkan RHI ] Failed to get physical device surface capabilities: ") << result << '\n';
+            return result;
+        }
+
+        // 当前尺寸未设置则返回VK_SUBOPTIMAL_KHR
+        if (surfaceCapabilities.currentExtent.width == -1 || surfaceCapabilities.currentExtent.height == -1) {
+            return VK_SUBOPTIMAL_KHR;
+        }
+
+        mSwapChainCreateInfo.imageExtent = surfaceCapabilities.currentExtent;
+        // 设置旧的交换链,可能会有利于重用一些资源
+        mSwapChainCreateInfo.oldSwapchain = mSwapChain;
+
+        // 等待图形队列完成
+        result = vkQueueWaitIdle(mQueueGraphics);
+        // 如果等待失败,则等待呈现队列
+        if (result != VK_SUCCESS && mQueueGraphics != mQueuePresentation) {
+            result = vkQueueWaitIdle(mQueuePresentation);
+        }
+
+        if (result != VK_SUCCESS) {
+            std::cout << std::format("[ Vulkan RHI ] Failed to wait for queue to be idle: ") << result << '\n';
+            return result;
+        }
+
+        // 调用销毁交换链回调函数
+        for (auto& callback: mDestroySwapChainCallbacks) {
+            callback();
+        }
+
+        // 销毁image view
+        for (auto& item: mSwapChainImageViews) {
+            if (item != nullptr) {
+                vkDestroyImageView(mDevice, item, nullptr);
+            }
+        }
+        mSwapChainImageViews.resize(0);
+
+        // 创建新的交换链
+        result = CreateSwapchainInternal();
+        if (result != VK_SUCCESS) {
+            return result;
+        }
+
+        // 交换链创建成功后,调用回调函数
+        for (auto& callback: mCreateSwapChainCallbacks) {
+            callback();
+        }
+
+        return VK_SUCCESS;
+    }
+
+private:
+    std::vector<void (*)()> mCreateSwapChainCallbacks;
+    std::vector<void (*)()> mDestroySwapChainCallbacks;
+
+public:
+    void AddCreateSwapChainCallback(void (*function)()) {
+        mCreateSwapChainCallbacks.push_back(function);
+    }
+
+    void AddDestroySwapChainCallback(void (*function)()) {
+        mDestroySwapChainCallbacks.push_back(function);
+    }
+
+private:
+    std::vector<void (*)()> mCreateDeviceCallbacks;
+    std::vector<void (*)()> mDestroyDeviceCallbacks;
+
+public:
+    void AddCreateDeviceCallback(void (*function)()) {
+        mCreateDeviceCallbacks.push_back(function);
+    }
+
+    void AddDestroyDeviceCallback(void (*function)()) {
+        mDestroyDeviceCallbacks.push_back(function);
+    }
+
+    VkResult WaitIdleDevice() const {
+        // 等待设备空闲
+        VkResult result = vkDeviceWaitIdle(mDevice);
+        if (result != VK_SUCCESS) {
+            std::cout << std::format("[ Vulkan RHI ] Failed to wait for the device to be idle: ") << result << '\n';
+        }
+        return result;
+    }
+
+    VkResult RecreateDevice(VkDeviceCreateFlags flags = 0) {
+        // 等待设备空闲
+        VkResult result = WaitIdleDevice();
+        if (result != VK_SUCCESS) {
+            return result;
+        }
+
+        // 销毁设备
+        if (mSwapChain != nullptr) {
+            // 执行销毁交换链回调函数
+            for (auto& callback: mDestroySwapChainCallbacks) {
+                callback();
+            }
+
+            // 销毁image view
+            for (auto& imageView: mSwapChainImageViews) {
+                if (imageView != nullptr) {
+                    vkDestroyImageView(mDevice, imageView, nullptr);
+                }
+            }
+
+            mSwapChainImageViews.resize(0);
+            // 销毁交换链
+            vkDestroySwapchainKHR(mDevice, mSwapChain, nullptr);
+            // 重置交换链指针和创建信息
+            mSwapChain           = VK_NULL_HANDLE;
+            mSwapChainCreateInfo = {};
+        }
+
+        // 执行销毁设备回调函数
+        for (auto& callback: mDestroyDeviceCallbacks) {
+            callback();
+        }
+
+        // 销毁逻辑设备
+        if (mDevice != nullptr) {
+            // 销毁逻辑设备
+            vkDestroyDevice(mDevice, nullptr);
+            // 重置设备指针
+            mDevice = VK_NULL_HANDLE;
+        }
+
+        // 重新创建设备
+        result = CreateDevice(flags);
+
         return VK_SUCCESS;
     }
 
