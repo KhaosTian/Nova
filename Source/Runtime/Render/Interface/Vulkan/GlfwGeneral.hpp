@@ -1,5 +1,8 @@
 #pragma once
+
+#include "VulkanHelper.hpp"
 #include "VulkanRHI.h"
+
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
@@ -7,10 +10,8 @@ inline GLFWwindow* kWindow;
 
 inline GLFWmonitor* kMonitor;
 
-inline auto kWindowTitle = "LearnVulkan";
-
 inline bool InitializeWindow(const VkExtent2D size, const bool fullScreen = false, const bool isResizable = true, bool limitFrameRate = true) {
-    auto& rhi = Nova::VulkanRHI::GetInstance();
+    auto& rhi = Nova::VulkanRHI::Singleton();
 
     if (glfwInit() == 0) {
         std::cout << std::format("[ InitializeWindow ] ERROR\nFailed to initialize GLFW!\n");
@@ -28,8 +29,9 @@ inline bool InitializeWindow(const VkExtent2D size, const bool fullScreen = fals
     const GLFWvidmode* pMode = glfwGetVideoMode(kMonitor);
 
     // 根据模式创建窗口
-    kWindow = fullScreen ? glfwCreateWindow(pMode->width, pMode->height, kWindowTitle, kMonitor, nullptr)
-                         : glfwCreateWindow(static_cast<int>(size.width), static_cast<int>(size.height), kWindowTitle, nullptr, nullptr);
+    kWindow = fullScreen
+                  ? glfwCreateWindow(pMode->width, pMode->height, Nova::DEFAULT_WINDOW_TITLE, kMonitor, nullptr)
+                  : glfwCreateWindow(static_cast<int>(size.width), static_cast<int>(size.height), Nova::DEFAULT_WINDOW_TITLE, nullptr, nullptr);
     if (kWindow == nullptr) {
         std::cout << std::format("[ InitializeWindow ] ERROR\nFailed to create GLFW window!\n");
         glfwTerminate();
@@ -47,7 +49,7 @@ inline bool InitializeWindow(const VkExtent2D size, const bool fullScreen = fals
     rhi.UseLatestApiVersion();
 
     // 创建Vulkan实例
-    if (rhi.CreateVkInstance() != VK_SUCCESS) {
+    if (rhi.CreateInstance() != VK_SUCCESS) {
         std::cout << std::format("[ InitializeWindow ] ERROR\nFailed to create Vulkan instance!\n");
         return false;
     }
@@ -67,7 +69,8 @@ inline bool InitializeWindow(const VkExtent2D size, const bool fullScreen = fals
 
     //window surface
     VkSurfaceKHR surface = VK_NULL_HANDLE;
-    VkResult     result  = glfwCreateWindowSurface(rhi.GetVKInstance(), kWindow, nullptr, &surface);
+
+    VkResult result = glfwCreateWindowSurface(rhi.GetInstance(), kWindow, nullptr, &surface);
     if (result != VK_SUCCESS) {
         std::cout << std::format("[ InitializeWindow ] ERROR\nFailed to create GLFW surface!\n");
         glfwTerminate();
@@ -90,7 +93,7 @@ inline bool InitializeWindow(const VkExtent2D size, const bool fullScreen = fals
     }
 
     // 创建交换链
-    result = rhi.CreateSwapchain(limitFrameRate);
+    result = rhi.TryCreateSwapchain(limitFrameRate);
     if (result != VK_SUCCESS) {
         std::cout << std::format("[ InitializeWindow ] ERROR\nFailed to create swapchain: ") << result << '\n';
         return false;
@@ -101,7 +104,7 @@ inline bool InitializeWindow(const VkExtent2D size, const bool fullScreen = fals
 
 inline void TerminateWindow() {
     // 终止窗口前应该确保vulkan device已经空闲, 没有和窗口系统的呈现引擎进行交互
-    Nova::VulkanRHI::GetInstance().WaitIdleDevice();
+    Nova::VulkanRHI::Singleton().WaitIdleDevice();
     glfwTerminate();
 }
 
@@ -117,7 +120,7 @@ inline void UpdateWindowTitleWithFps() {
 
     if ((timeDiff = currentTime - lastTime) >= 0.1) {
         ss.precision(1);
-        ss << kWindowTitle << "     " << std::fixed << frameCount / timeDiff << " FPS";
+        ss << Nova::DEFAULT_WINDOW_TITLE << "     " << std::fixed << frameCount / timeDiff << " FPS";
         glfwSetWindowTitle(kWindow, ss.str().c_str()); // 更新窗口标题
         ss.str("");
         lastTime   = currentTime; // 更新上一帧时间

@@ -1,118 +1,45 @@
 #pragma once
-#include "Render/Interface/Vulkan/GlfwGeneral.hpp"
-#include "VkStart.h"
-#include <cstdint>
-#include <stdlib.h>
-#include <vector>
+#include "VulkanHelper.hpp"
+
+#ifdef NOVA_DEBUG
+    #define ENABLE_DEBUG_MESSENGER true
+#else
+    #define ENABLE_DEBUG_MESSENGER false
+#endif
 
 namespace Nova {
 
-constexpr VkExtent2D kDefaultWindowSize = { 1280, 720 };
-
 class VulkanRHI {
+    //======================================================================================================================================================
+    // singleton
+    //======================================================================================================================================================
 private:
-    // 单例模式私有构造函数和析构函数，确保只能通过GetSingleton()获取实例
     VulkanRHI() = default;
-    ~VulkanRHI() {
-        if (mVkInstance == nullptr) {
-            return;
-        }
-
-        // 销毁逻辑设备
-        if (mDevice != nullptr) {
-            WaitIdleDevice();
-
-            // 销毁交换链
-            if (mSwapChain != nullptr) {
-                for (auto& callback: mDestroySwapChainCallbacks) {
-                    callback();
-                }
-                for (auto& imageView: mSwapChainImageViews) {
-                    if (imageView != nullptr) {
-                        vkDestroyImageView(mDevice, imageView, nullptr);
-                    }
-                }
-                vkDestroySwapchainKHR(mDevice, mSwapChain, nullptr);
-            }
-
-            // 调用销毁设备回调
-            for (auto& callback: mDestroyDeviceCallbacks) {
-                callback();
-            }
-
-            vkDestroyDevice(mDevice, nullptr);
-        }
-
-        // 销毁窗口表面
-        if (mSurface != nullptr) {
-            vkDestroySurfaceKHR(mVkInstance, mSurface, nullptr);
-        }
-
-        // 销毁debug messenger
-        if (mDebugMessenger != nullptr) {
-            PFN_vkDestroyDebugUtilsMessengerEXT vkDestroyDebugUtilsMessengerExt =
-                reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(mVkInstance, "vkDestroyDebugUtilsMessengerEXT"));
-            if (vkDestroyDebugUtilsMessengerExt != nullptr) {
-                vkDestroyDebugUtilsMessengerExt(mVkInstance, mDebugMessenger, nullptr);
-            }
-        }
-
-        // 销毁Vulkan实例
-        vkDestroyInstance(mVkInstance, nullptr);
-    }
-
-public:
-    void Terminal() {
-        this->~VulkanRHI();
-        mVkInstance     = VK_NULL_HANDLE;
-        mDebugMessenger = VK_NULL_HANDLE;
-        mPhysicalDevice = VK_NULL_HANDLE;
-        mDevice         = VK_NULL_HANDLE;
-        mSurface        = VK_NULL_HANDLE;
-        mSwapChain      = VK_NULL_HANDLE;
-        mSwapChainImages.resize(0);
-        mSwapChainImageViews.resize(0);
-        mSwapChainCreateInfo = {};
-    }
 
 public:
     // 禁用移动构造，保证单例唯一性
     VulkanRHI(VulkanRHI&&) = delete;
-
     // 获取单例实例的静态方法，使用Meyer'ss单例模式
-    static VulkanRHI& GetInstance() {
+    static VulkanRHI& Singleton() {
         static VulkanRHI rhi;
         return rhi;
     }
 
-    //===========================================================================
-    // vulkan instance, layer, extension
-    //================== =========================================================
+    //======================================================================================================================================================
+    // vulkan instance, layer, extension, debug messenger
+    //======================================================================================================================================================
 private:
-    VkInstance mVkInstance;
+    VkInstance mInstance = VK_NULL_HANDLE;
 
-    // 实例层和扩展名称容器
-    // 使用vector存储，支持动态添加和查询
     std::vector<const char*> mInstanceLayers;
     std::vector<const char*> mInstanceExtensions;
 
-    // 安全地将名称添加到容器的辅助方法
-    // 防止重复添加相同的层或扩展名称
-    static void AddNameToContainer(const char* name, std::vector<const char*>& container) {
-        // 检查是否已存在同名项
-        for (const auto& item: container) {
-            if (strcmp(name, item) == 0) {
-                return; // 如果已存在，直接返回
-            }
-        }
-        // 不存在则添加
-        container.push_back(name);
-    }
+    VkDebugUtilsMessengerEXT mDebugMessenger = VK_NULL_HANDLE;
 
 public:
     // 获取Vulkan实例句柄
-    VkInstance GetVKInstance() const {
-        return mVkInstance;
+    VkInstance GetInstance() const {
+        return mInstance;
     }
 
     // 获取实例层名称列表
@@ -125,6 +52,16 @@ public:
         return mInstanceExtensions;
     }
 
+    // 设置实例层名称
+    void SetInstanceLayerNames(const std::vector<const char*>& layerNames) {
+        mInstanceLayers = layerNames;
+    }
+    // 设置实例扩展名称
+    void SetInstanceExtensionNames(const std::vector<const char*>& extensionNames) {
+        mInstanceExtensions = extensionNames;
+    }
+
+public:
     // 添加实例层名称
     void AddInstanceLayerName(const char* layer) {
         AddNameToContainer(layer, mInstanceLayers);
@@ -135,13 +72,14 @@ public:
         AddNameToContainer(extension, mInstanceExtensions);
     }
 
+public:
     // 创建Vulkan实例的详细方法
-    VkResult CreateVkInstance(VkInstanceCreateFlags flags = 0) {
-// 在调试模式下自动添加验证层和调试扩展
-#ifdef NOVA_DEBUG
-        AddInstanceLayerName("VK_LAYER_KHRONOS_validation");
-        AddInstanceExtensionName(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-#endif
+    VkResult CreateInstance(VkInstanceCreateFlags flags = 0) {
+        // 在调试模式下自动添加验证层和调试扩展
+        if constexpr (ENABLE_DEBUG_MESSENGER) {
+            AddInstanceLayerName("VK_LAYER_KHRONOS_validation");
+            AddInstanceExtensionName(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        }
 
         // 配置应用程序信息
         VkApplicationInfo applicationInfo = {
@@ -161,8 +99,9 @@ public:
         };
 
         // 尝试创建Vulkan实例
-        if (const VkResult result = vkCreateInstance(&instanceCreateInfo, nullptr, &mVkInstance)) {
-            std::cout << std::format("[ Vulkan RHI ] 创建实例失败: ") << result << '\n';
+        VkResult result = vkCreateInstance(&instanceCreateInfo, nullptr, &mInstance);
+        if (result != VK_SUCCESS) {
+            std::cout << std::format("[ Vulkan RHI ] 创建实例失败: {}\n", int32_t(result));
             return result;
         }
 
@@ -174,10 +113,11 @@ public:
             VK_VERSION_PATCH(mApiVersion)
         );
 
-// 在调试模式下创建调试信使
-#ifdef NOVA_DEBUG
-        CreateDebugMessenger();
-#endif
+        // 在调试模式下创建调试信使
+        if constexpr (ENABLE_DEBUG_MESSENGER) {
+            CreateDebugMessenger();
+        }
+
         return VK_SUCCESS;
     }
 
@@ -186,7 +126,7 @@ public:
         uint32_t layerCount;
         // 获取可用层数量
         if (VkResult result = vkEnumerateInstanceLayerProperties(&layerCount, nullptr)) {
-            std::cout << std::format("[ Vulkan RHI ] 枚举实例层属性失败: ") << result << '\n';
+            std::cout << std::format("[ Vulkan RHI ] 枚举实例层属性失败: {}\n", int32_t(result));
             return result;
         }
 
@@ -202,7 +142,7 @@ public:
         std::vector<VkLayerProperties> availableLayers;
         availableLayers.resize(layerCount);
         if (VkResult result = vkEnumerateInstanceLayerProperties(&layerCount, availableLayers.data())) {
-            std::cout << std::format("[ Vulkan RHI ] 枚举实例层属性失败: ") << result << '\n';
+            std::cout << std::format("[ Vulkan RHI ] 枚举实例层属性失败: {}\n", int32_t(result));
             return result;
         }
 
@@ -224,17 +164,12 @@ public:
         return VK_SUCCESS;
     }
 
-    // 设置实例层名称
-    void SetInstanceLayerNames(const std::vector<const char*>& layerNames) {
-        mInstanceLayers = layerNames;
-    }
-
     // 检查实例扩展名称是否可用
     VkResult CheckInstanceExtensionNames(std::span<const char*> extensionNames) {
         uint32_t extensionCount;
         // 获取可用扩展数量
         if (VkResult result = vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr)) {
-            std::cout << std::format("[ Vulkan RHI ] 枚举实例扩展属性失败: ") << result << '\n';
+            std::cout << std::format("[ Vulkan RHI ] 枚举实例扩展属性失败: {}\n", int32_t(result));
             return result;
         }
 
@@ -249,7 +184,7 @@ public:
         // 获取可用扩展属性
         std::vector<VkExtensionProperties> availableExtensions(extensionCount);
         if (VkResult result = vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, availableExtensions.data())) {
-            std::cout << std::format("[ Vulkan RHI ] 枚举实例扩展属性失败: ") << result << '\n';
+            std::cout << std::format("[ Vulkan RHI ] 枚举实例扩展属性失败: {}\n", int32_t(result));
             return result;
         }
 
@@ -270,16 +205,6 @@ public:
         return VK_SUCCESS;
     }
 
-    // 设置实例扩展名称
-    void SetInstanceExtensionNames(const std::vector<const char*>& extensionNames) {
-        mInstanceExtensions = extensionNames;
-    }
-
-    //debug messenger
-    //===========================================================================
-private:
-    VkDebugUtilsMessengerEXT mDebugMessenger;
-
     VkResult CreateDebugMessenger() {
         static PFN_vkDebugUtilsMessengerCallbackEXT DebugUtilsMessengerCallback = [](VkDebugUtilsMessageSeverityFlagBitsEXT      messageSeverity,
                                                                                      VkDebugUtilsMessageTypeFlagsEXT             messageTypes,
@@ -298,11 +223,11 @@ private:
         };
 
         const auto vkCreateDebugUtilsMessengerExt =
-            reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(mVkInstance, "vkCreateDebugUtilsMessengerEXT"));
+            reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(mInstance, "vkCreateDebugUtilsMessengerEXT"));
         if (vkCreateDebugUtilsMessengerExt != nullptr) {
-            const VkResult result = vkCreateDebugUtilsMessengerExt(mVkInstance, &debugUtilsMessengerCreateInfo, nullptr, &mDebugMessenger);
+            VkResult result = vkCreateDebugUtilsMessengerExt(mInstance, &debugUtilsMessengerCreateInfo, nullptr, &mDebugMessenger);
             if (result != VK_SUCCESS) {
-                std::cout << std::format("[ Vulkan RHI ] Failed to create debug messenger: ") << result << '\n';
+                std::cout << std::format("[ Vulkan RHI ] Failed to create debug messenger: {}\n", int32_t(result));
             }
             return result;
         }
@@ -313,42 +238,39 @@ private:
         return VK_RESULT_MAX_ENUM;
     }
 
-    //window surface
-    //===========================================================================
+    //======================================================================================================================================================
+    //vulkan surface, device, physical device, queue, queue family index
+    //======================================================================================================================================================
 private:
     VkSurfaceKHR mSurface;
+
+    VkPhysicalDevice mPhysicalDevice = VK_NULL_HANDLE;
+
+    VkPhysicalDeviceProperties       mPhysicalDeviceProperties;
+    VkPhysicalDeviceMemoryProperties mPhysicalDeviceMemoryProperties;
+    std::vector<VkPhysicalDevice>    mAvailablePhysicalDevices;
+
+    VkDevice mDevice = VK_NULL_HANDLE;
+
+    uint32_t mQueueFamilyIndexGraphics     = VK_QUEUE_FAMILY_IGNORED;
+    uint32_t mQueueFamilyIndexPresentation = VK_QUEUE_FAMILY_IGNORED;
+    uint32_t mQueueFamilyIndexCompute      = VK_QUEUE_FAMILY_IGNORED;
+
+    VkQueue mQueueGraphics     = VK_NULL_HANDLE;
+    VkQueue mQueuePresentation = VK_NULL_HANDLE;
+    VkQueue mQueueCompute      = VK_NULL_HANDLE;
+
+    std::vector<const char*> mDeviceExtensionNames;
+
+private:
+    std::vector<void (*)()> mCreateDeviceCallbacks;
+    std::vector<void (*)()> mDestroyDeviceCallbacks;
 
 public:
     VkSurfaceKHR GetSurface() const {
         return mSurface;
     }
 
-    void SetSurface(VkSurfaceKHR surface) {
-        if (mSurface == nullptr) {
-            mSurface = surface;
-        }
-    }
-
-    //devices
-    //===========================================================================
-private:
-    VkPhysicalDevice                 mPhysicalDevice;
-    VkPhysicalDeviceProperties       mPhysicalDeviceProperties;
-    VkPhysicalDeviceMemoryProperties mPhysicalDeviceMemoryProperties;
-    std::vector<VkPhysicalDevice>    mAvailablePhysicalDevices;
-
-    VkDevice mDevice;
-    uint32_t mQueueFamilyIndexGraphics     = VK_QUEUE_FAMILY_IGNORED;
-    uint32_t mQueueFamilyIndexPresentation = VK_QUEUE_FAMILY_IGNORED;
-    uint32_t mQueueFamilyIndexCompute      = VK_QUEUE_FAMILY_IGNORED;
-
-    VkQueue mQueueGraphics;
-    VkQueue mQueuePresentation;
-    VkQueue mQueueCompute;
-
-    std::vector<const char*> mDeviceExtensionNames;
-
-public:
     const VkPhysicalDeviceProperties& GetPhysicalDeviceProperties() const {
         return mPhysicalDeviceProperties;
     }
@@ -369,14 +291,51 @@ public:
         return static_cast<uint32_t>(mAvailablePhysicalDevices.size());
     }
 
-    static VkBool32 ConvertToVkBool32(bool value) {
-        return value ? VK_TRUE : VK_FALSE;
+    uint32_t GetQueueFamilyIndexGraphics() const {
+        return mQueueFamilyIndexGraphics;
     }
 
-    static bool ConvertToBool(VkBool32 value) {
-        return (value == VK_TRUE);
+    uint32_t GetQueueFamilyIndexPresentation() const {
+        return mQueueFamilyIndexPresentation;
     }
 
+    uint32_t GetQueueFamilyIndexCompute() const {
+        return mQueueFamilyIndexCompute;
+    }
+
+    const std::vector<const char*>& GetDeviceExtensions() const {
+        return mDeviceExtensionNames;
+    }
+
+    void SetDeviceExtensionNames(const std::vector<const char*>& extensionNames) {
+        mDeviceExtensionNames = extensionNames;
+    }
+
+public:
+    void SetSurface(VkSurfaceKHR surface) {
+        if (mSurface == nullptr) {
+            mSurface = surface;
+        }
+    }
+
+public:
+    VkResult CheckDeviceExtensionNames(std::span<const char*> extensionNamesToCheck, const char* layerName = nullptr) const {
+        return VK_SUCCESS;
+    }
+    void AddDeviceExtension(const char* extensionName) {
+        AddNameToContainer(extensionName, mDeviceExtensionNames);
+    }
+
+public:
+    void AddCreateDeviceCallback(void (*function)()) {
+        mCreateDeviceCallbacks.push_back(function);
+    }
+
+    void AddDestroyDeviceCallback(void (*function)()) {
+        mDestroyDeviceCallbacks.push_back(function);
+    }
+
+public:
     VkResult GetQueueFamilyIndices(VkPhysicalDevice physicalDevice, bool enableGraphics, bool enableCompute, uint32_t (&queueFamilyIndices)[3]) {
         // 获取队列族数量
         uint32_t QueueFamilyCount = 0;
@@ -457,29 +416,9 @@ public:
         return VK_SUCCESS;
     }
 
-    uint32_t GetQueueFamilyIndexGraphics() const {
-        return mQueueFamilyIndexGraphics;
-    }
-
-    uint32_t GetQueueFamilyIndexPresentation() const {
-        return mQueueFamilyIndexPresentation;
-    }
-
-    uint32_t GetQueueFamilyIndexCompute() const {
-        return mQueueFamilyIndexCompute;
-    }
-
-    const std::vector<const char*>& GetDeviceExtensions() const {
-        return mDeviceExtensionNames;
-    }
-
-    void AddDeviceExtension(const char* extensionName) {
-        AddNameToContainer(extensionName, mDeviceExtensionNames);
-    }
-
     VkResult GetPhysicalDevice() {
         uint32_t deviceCount = 0;
-        VkResult result      = vkEnumeratePhysicalDevices(mVkInstance, &deviceCount, nullptr);
+        VkResult result      = vkEnumeratePhysicalDevices(mInstance, &deviceCount, nullptr);
         if (result != VK_SUCCESS) {
             std::cout << std::format("[ Vulkan RHI ] Failed to enumerate physical devices: ") << result << '\n';
             return result;
@@ -490,7 +429,7 @@ public:
         }
 
         mAvailablePhysicalDevices.resize(deviceCount);
-        result = vkEnumeratePhysicalDevices(mVkInstance, &deviceCount, mAvailablePhysicalDevices.data());
+        result = vkEnumeratePhysicalDevices(mInstance, &deviceCount, mAvailablePhysicalDevices.data());
         if (result != VK_SUCCESS) {
             std::cout << std::format("[ Vulkan RHI ] Failed to enumerate physical devices: ") << result << '\n';
         }
@@ -651,16 +590,67 @@ public:
         return VK_SUCCESS;
     }
 
-    VkResult CheckDeviceExtensionNames(std::span<const char*> extensionNamesToCheck, const char* layerName = nullptr) const {
+public:
+    VkResult WaitIdleDevice() const {
+        // 等待设备空闲
+        VkResult result = vkDeviceWaitIdle(mDevice);
+        if (result != VK_SUCCESS) {
+            std::cout << std::format("[ Vulkan RHI ] Failed to wait for the device to be idle: ") << result << '\n';
+        }
+        return result;
+    }
+
+    VkResult RecreateDevice(VkDeviceCreateFlags flags = 0) {
+        // 等待设备空闲
+        VkResult result = WaitIdleDevice();
+        if (result != VK_SUCCESS) {
+            return result;
+        }
+
+        // 销毁设备
+        if (mSwapChain != nullptr) {
+            // 执行销毁交换链回调函数
+            for (auto& callback: mDestroySwapChainCallbacks) {
+                callback();
+            }
+
+            // 销毁image view
+            for (auto& imageView: mSwapChainImageViews) {
+                if (imageView != nullptr) {
+                    vkDestroyImageView(mDevice, imageView, nullptr);
+                }
+            }
+
+            mSwapChainImageViews.resize(0);
+            // 销毁交换链
+            vkDestroySwapchainKHR(mDevice, mSwapChain, nullptr);
+            // 重置交换链指针和创建信息
+            mSwapChain           = VK_NULL_HANDLE;
+            mSwapChainCreateInfo = {};
+        }
+
+        // 执行销毁设备回调函数
+        for (auto& callback: mDestroyDeviceCallbacks) {
+            callback();
+        }
+
+        // 销毁逻辑设备
+        if (mDevice != nullptr) {
+            // 销毁逻辑设备
+            vkDestroyDevice(mDevice, nullptr);
+            // 重置设备指针
+            mDevice = VK_NULL_HANDLE;
+        }
+
+        // 重新创建设备
+        result = CreateDevice(flags);
+
         return VK_SUCCESS;
     }
 
-    void SetDeviceExtensionNames(const std::vector<const char*>& extensionNames) {
-        mDeviceExtensionNames = extensionNames;
-    }
-
-    //swap chain
-    //===========================================================================
+    //======================================================================================================================================================
+    //swap chain，image, image view
+    //======================================================================================================================================================
 private:
     std::vector<VkSurfaceFormatKHR> mAvailableSurfaceFormats;
 
@@ -670,6 +660,53 @@ private:
 
     VkSwapchainCreateInfoKHR mSwapChainCreateInfo = {};
 
+private:
+    std::vector<void (*)()> mCreateSwapChainCallbacks;
+    std::vector<void (*)()> mDestroySwapChainCallbacks;
+
+public:
+    const VkFormat& GetAvailableSurfaceFormat(uint32_t index) const {
+        return mAvailableSurfaceFormats[index].format;
+    }
+
+    const VkColorSpaceKHR& GetAvailableSurfaceColorSpace(uint32_t index) const {
+        return mAvailableSurfaceFormats[index].colorSpace;
+    }
+
+    uint32_t GetAvailableSurfaceFormatCount() const {
+        return static_cast<uint32_t>(mAvailableSurfaceFormats.size());
+    }
+
+    VkSwapchainKHR GetSwapChain() const {
+        return mSwapChain;
+    }
+
+    VkImage GetSwapChainImage(uint32_t index) const {
+        return mSwapChainImages[index];
+    }
+
+    uint32_t GetSwapChainImageCount() const {
+        return static_cast<uint32_t>(mSwapChainImages.size());
+    }
+
+    VkImageView GetSwapChainImageView(uint32_t index) const {
+        return mSwapChainImageViews[index];
+    }
+
+    const VkSwapchainCreateInfoKHR& GetSwapChainCreateInfo() const {
+        return mSwapChainCreateInfo;
+    }
+
+public:
+    void AddCreateSwapChainCallback(void (*function)()) {
+        mCreateSwapChainCallbacks.push_back(function);
+    }
+
+    void AddDestroySwapChainCallback(void (*function)()) {
+        mDestroySwapChainCallbacks.push_back(function);
+    }
+
+private:
     VkResult CreateSwapchainInternal() {
         // 创建交换链
         VkResult result = vkCreateSwapchainKHR(mDevice, &mSwapChainCreateInfo, nullptr, &mSwapChain);
@@ -716,39 +753,7 @@ private:
     }
 
 public:
-    const VkFormat& GetAvailableSurfaceFormat(uint32_t index) const {
-        return mAvailableSurfaceFormats[index].format;
-    }
-
-    const VkColorSpaceKHR& GetAvailableSurfaceColorSpace(uint32_t index) const {
-        return mAvailableSurfaceFormats[index].colorSpace;
-    }
-
-    uint32_t GetAvailableSurfaceFormatCount() const {
-        return static_cast<uint32_t>(mAvailableSurfaceFormats.size());
-    }
-
-    VkSwapchainKHR GetSwapChain() const {
-        return mSwapChain;
-    }
-
-    VkImage GetSwapChainImage(uint32_t index) const {
-        return mSwapChainImages[index];
-    }
-
-    uint32_t GetSwapChainImageCount() const {
-        return static_cast<uint32_t>(mSwapChainImages.size());
-    }
-
-    VkImageView GetSwapChainImageView(uint32_t index) const {
-        return mSwapChainImageViews[index];
-    }
-
-    const VkSwapchainCreateInfoKHR& GetSwapChainCreateInfo() const {
-        return mSwapChainCreateInfo;
-    }
-
-    VkResult GetSurfaceFormats() {
+    VkResult TryGetSurfaceFormats() {
         uint32_t surfaceFormatCount = 0;
 
         VkResult result = vkGetPhysicalDeviceSurfaceFormatsKHR(mPhysicalDevice, mSurface, &surfaceFormatCount, nullptr);
@@ -772,7 +777,7 @@ public:
         return VK_SUCCESS;
     }
 
-    VkResult SetSurfaceFormat(VkSurfaceFormatKHR surfaceFormat) {
+    VkResult TrySetSurfaceFormat(VkSurfaceFormatKHR surfaceFormat) {
         bool formatIsAvailable = false;
         bool needCheckFormat   = (surfaceFormat.format != VK_FORMAT_UNDEFINED);
         for (auto& item: mAvailableSurfaceFormats) {
@@ -786,19 +791,18 @@ public:
 
         // 如果没有符合的格式,返回指定错误码
         if (formatIsAvailable == false) {
-            std::cout << std::format("[ Vulkan RHI ] Surface format is not available\n");
             return VK_ERROR_FORMAT_NOT_SUPPORTED;
         }
 
         // 如果交换链已经存在,则重新创建交换链
         if (mSwapChain != nullptr) {
-            return RecreateSwapChain();
+            return TryRecreateSwapChain();
         }
 
         return VK_SUCCESS;
     }
 
-    VkResult CreateSwapchain(bool limitFrameRate = true, VkSwapchainCreateFlagsKHR flags = 0) {
+    VkResult TryCreateSwapchain(bool limitFrameRate = true, VkSwapchainCreateFlagsKHR flags = 0) {
         // 获取surface capabilities
         VkSurfaceCapabilitiesKHR surfaceCapabilities = {};
         if (VkResult result = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(mPhysicalDevice, mSurface, &surfaceCapabilities)) {
@@ -814,9 +818,9 @@ public:
         // 如果尺寸未定，当前尺寸的值会是-1
         if (surfaceCapabilities.currentExtent.width == -1) {
             imageExtent.width =
-                glm::clamp(kDefaultWindowSize.width, surfaceCapabilities.minImageExtent.width, surfaceCapabilities.maxImageExtent.width);
+                glm::clamp(DEFAULT_WINDOW_SIZE.width, surfaceCapabilities.minImageExtent.width, surfaceCapabilities.maxImageExtent.width);
             imageExtent.height =
-                glm::clamp(kDefaultWindowSize.height, surfaceCapabilities.minImageExtent.height, surfaceCapabilities.maxImageExtent.height);
+                glm::clamp(DEFAULT_WINDOW_SIZE.height, surfaceCapabilities.minImageExtent.height, surfaceCapabilities.maxImageExtent.height);
         } else {
             imageExtent = surfaceCapabilities.currentExtent;
         }
@@ -856,7 +860,7 @@ public:
         // 如果没有可用的surface format, 则尝试获取
         if (mAvailableSurfaceFormats.empty()) {
             // 如果没有失败,那么availableSurfaceFormats肯定有值
-            VkResult result = GetSurfaceFormats();
+            VkResult result = TryGetSurfaceFormats();
             if (result != VK_SUCCESS) {
                 return result;
             }
@@ -865,8 +869,8 @@ public:
         // 如果没有指定图像格式,则尝试选择一个
         if (mSwapChainCreateInfo.imageFormat == VK_FORMAT_UNDEFINED) {
             // 尝试选择一个四分量UNORM格式,通常R8G8B8A8或者B8G8R8A8肯定是可用的
-            if (SetSurfaceFormat({ VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR }) != VK_SUCCESS &&
-                SetSurfaceFormat({ VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR }) != VK_SUCCESS) {
+            if (TrySetSurfaceFormat({ VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR }) != VK_SUCCESS &&
+                TrySetSurfaceFormat({ VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR }) != VK_SUCCESS) {
                 // 如果真的没有找到, 那么就选择第一个可用的格式
                 mSwapChainCreateInfo.imageFormat     = mAvailableSurfaceFormats[0].format;
                 mSwapChainCreateInfo.imageColorSpace = mAvailableSurfaceFormats[0].colorSpace;
@@ -928,7 +932,7 @@ public:
         return VK_SUCCESS;
     }
 
-    VkResult RecreateSwapChain() {
+    VkResult TryRecreateSwapChain() {
         VkSurfaceCapabilitiesKHR surfaceCapabilities = {};
         // 获取surface capabilities
         VkResult result = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(mPhysicalDevice, mSurface, &surfaceCapabilities);
@@ -985,91 +989,75 @@ public:
         return VK_SUCCESS;
     }
 
-private:
-    std::vector<void (*)()> mCreateSwapChainCallbacks;
-    std::vector<void (*)()> mDestroySwapChainCallbacks;
+    //======================================================================================================================================================
+    // destroy
+    //======================================================================================================================================================
 
 public:
-    void AddCreateSwapChainCallback(void (*function)()) {
-        mCreateSwapChainCallbacks.push_back(function);
-    }
-
-    void AddDestroySwapChainCallback(void (*function)()) {
-        mDestroySwapChainCallbacks.push_back(function);
-    }
-
-private:
-    std::vector<void (*)()> mCreateDeviceCallbacks;
-    std::vector<void (*)()> mDestroyDeviceCallbacks;
-
-public:
-    void AddCreateDeviceCallback(void (*function)()) {
-        mCreateDeviceCallbacks.push_back(function);
-    }
-
-    void AddDestroyDeviceCallback(void (*function)()) {
-        mDestroyDeviceCallbacks.push_back(function);
-    }
-
-    VkResult WaitIdleDevice() const {
-        // 等待设备空闲
-        VkResult result = vkDeviceWaitIdle(mDevice);
-        if (result != VK_SUCCESS) {
-            std::cout << std::format("[ Vulkan RHI ] Failed to wait for the device to be idle: ") << result << '\n';
-        }
-        return result;
-    }
-
-    VkResult RecreateDevice(VkDeviceCreateFlags flags = 0) {
-        // 等待设备空闲
-        VkResult result = WaitIdleDevice();
-        if (result != VK_SUCCESS) {
-            return result;
-        }
-
-        // 销毁设备
-        if (mSwapChain != nullptr) {
-            // 执行销毁交换链回调函数
-            for (auto& callback: mDestroySwapChainCallbacks) {
-                callback();
-            }
-
-            // 销毁image view
-            for (auto& imageView: mSwapChainImageViews) {
-                if (imageView != nullptr) {
-                    vkDestroyImageView(mDevice, imageView, nullptr);
-                }
-            }
-
-            mSwapChainImageViews.resize(0);
-            // 销毁交换链
-            vkDestroySwapchainKHR(mDevice, mSwapChain, nullptr);
-            // 重置交换链指针和创建信息
-            mSwapChain           = VK_NULL_HANDLE;
-            mSwapChainCreateInfo = {};
-        }
-
-        // 执行销毁设备回调函数
-        for (auto& callback: mDestroyDeviceCallbacks) {
-            callback();
+    ~VulkanRHI() {
+        if (mInstance == nullptr) {
+            return;
         }
 
         // 销毁逻辑设备
         if (mDevice != nullptr) {
-            // 销毁逻辑设备
+            WaitIdleDevice();
+
+            // 销毁交换链
+            if (mSwapChain != nullptr) {
+                for (auto& callback: mDestroySwapChainCallbacks) {
+                    callback();
+                }
+                for (auto& imageView: mSwapChainImageViews) {
+                    if (imageView != nullptr) {
+                        vkDestroyImageView(mDevice, imageView, nullptr);
+                    }
+                }
+                vkDestroySwapchainKHR(mDevice, mSwapChain, nullptr);
+            }
+
+            // 调用销毁设备回调
+            for (auto& callback: mDestroyDeviceCallbacks) {
+                callback();
+            }
+
             vkDestroyDevice(mDevice, nullptr);
-            // 重置设备指针
-            mDevice = VK_NULL_HANDLE;
         }
 
-        // 重新创建设备
-        result = CreateDevice(flags);
+        // 销毁窗口表面
+        if (mSurface != nullptr) {
+            vkDestroySurfaceKHR(mInstance, mSurface, nullptr);
+        }
 
-        return VK_SUCCESS;
+        // 销毁debug messenger
+        if (mDebugMessenger != nullptr) {
+            PFN_vkDestroyDebugUtilsMessengerEXT vkDestroyDebugUtilsMessengerExt =
+                reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(mInstance, "vkDestroyDebugUtilsMessengerEXT"));
+            if (vkDestroyDebugUtilsMessengerExt != nullptr) {
+                vkDestroyDebugUtilsMessengerExt(mInstance, mDebugMessenger, nullptr);
+            }
+        }
+
+        // 销毁Vulkan实例
+        vkDestroyInstance(mInstance, nullptr);
     }
 
+    void Terminal() {
+        this->~VulkanRHI();
+        mInstance       = VK_NULL_HANDLE;
+        mDebugMessenger = VK_NULL_HANDLE;
+        mPhysicalDevice = VK_NULL_HANDLE;
+        mDevice         = VK_NULL_HANDLE;
+        mSurface        = VK_NULL_HANDLE;
+        mSwapChain      = VK_NULL_HANDLE;
+        mSwapChainImages.resize(0);
+        mSwapChainImageViews.resize(0);
+        mSwapChainCreateInfo = {};
+    }
+
+    //======================================================================================================================================================
     //vulkan version
-    //===========================================================================
+    //======================================================================================================================================================
 private:
     uint32_t mApiVersion = VK_API_VERSION_1_0;
 
