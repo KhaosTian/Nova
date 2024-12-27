@@ -9,11 +9,13 @@
 #include <memory>
 #include <numbers>
 #include <numeric>
+#include <optional>
 #include <span>
 #include <sstream>
 #include <stack>
 #include <unordered_map>
 #include <vector>
+
 
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 
